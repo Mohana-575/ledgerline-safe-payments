@@ -1,0 +1,65 @@
+# LedgerLine
+
+LedgerLine is a monorepo with a FastAPI backend and a React frontend.
+
+## Repository layout
+
+- `backend/` — Python API managed with uv.
+- `frontend/` — Vite, React, and TypeScript application.
+- `docker-compose.yml` — local PostgreSQL service.
+
+## Prerequisites
+
+- Python 3.13 or newer and [uv](https://docs.astral.sh/uv/)
+- Node.js and npm
+- Docker Compose
+
+## Local setup
+
+Copy `.env.example` to `.env`, then start PostgreSQL:
+
+```powershell
+Copy-Item .env.example .env
+docker compose up -d
+```
+
+The database initialization script creates `ledgerline_test` alongside the
+`ledgerline` database.
+
+Install backend dependencies and start the API:
+
+```powershell
+Set-Location backend
+uv sync
+uv run alembic upgrade head
+uv run uvicorn app.main:app --reload
+```
+
+The API health check is available at `GET /health`.
+
+The optional least-privilege database role can be created by running
+`psql -d ledgerline -f scripts/create_app_role.sql` from the repository root.
+The script prompts for the role password.
+
+Install frontend dependencies and start Vite in another terminal:
+
+```powershell
+Set-Location frontend
+npm install
+npm run dev
+```
+
+## Validation
+
+Run backend checks from `backend/`:
+
+```powershell
+uv run ruff check .
+uv run pytest
+```
+
+Run the frontend production build from `frontend/`:
+
+```powershell
+npm run build
+```
