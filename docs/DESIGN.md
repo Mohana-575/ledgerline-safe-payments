@@ -11,7 +11,7 @@
 | Transfer to an account | Any active account, by account number, when transferring from an account they are a member of | Any active account, by account number, when transferring from an account they are a member of | No |
 | Create accounts | Yes | No | No |
 | Assign account members | Yes | No | No |
-| Run reconciliation | Yes | No | No |
+| Run reconciliation and ledger verification | Yes | No | Yes, read-only |
 
 An administrator's administrative privileges do not grant permission to withdraw
 from or transfer out of an account unless the administrator is also a member of
@@ -31,6 +31,14 @@ money.
   rules; an ACCOUNT_HOLDER receives 404 for an account they are not a member of.
 - Each request resolves the user's current role from the database, and account
   responses do not include user credentials.
+- The seed command reserves `ACC1001` and `ACC1002` for its sample Personal and
+  Savings accounts. The External system account is `ACC1000`.
+- `GET /admin/reconcile` checks total account balances, account-to-ledger
+  balances, non-system account balances, and transaction debit/credit equality.
+  `GET /admin/verify-ledger` verifies every account's hash chain. Both routes
+  are available to ADMINs and AUDITORs and record their run in `audit_logs`.
+- `GET /dashboard` reports the authenticated user's member-account balances and
+  transaction activity; it does not expose credentials or other users' accounts.
 
 ## Ledger invariants
 

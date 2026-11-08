@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import uuid
+from datetime import UTC, datetime
 
 os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://localhost/ledgerline")
 os.environ.setdefault(
@@ -29,6 +31,7 @@ from app.services.ledger_errors import (
     InsufficientFundsError,
     InvalidAmountError,
 )
+from app.services.verify import verify_chain
 from fastapi.testclient import TestClient
 from sqlalchemy import Select
 
@@ -62,6 +65,42 @@ class FakeScalarRows:
 
     def all(self) -> list[Account]:
         return self.values
+
+
+class FakeEntryRows:
+    def __init__(self, values: list[LedgerEntry]) -> None:
+        self.values = values
+
+    def all(self) -> list[LedgerEntry]:
+        return self.values
+
+
+class FakeVerifySession:
+    def __init__(self, entries: list[LedgerEntry]) -> None:
+        self.entries = entries
+
+    def scalars(self, _statement: Select[tuple[LedgerEntry]]) -> FakeEntryRows:
+        return FakeEntryRows(
+            sorted(self.entries, key=lambda entry: entry.id)
+        )
+
+
+def _expected_entry_hash(entry: LedgerEntry) -> str:
+    payload = json.dumps(
+        {
+            "prev_hash": entry.prev_hash,
+            "txn_id": str(entry.txn_id),
+            "account_id": entry.account_id,
+            "direction": entry.direction,
+            "amount_paise": entry.amount_paise,
+            "balance_after_paise": entry.balance_after_paise,
+            "created_at": entry.created_at.astimezone(UTC).isoformat(),
+            "initiated_by": str(entry.initiated_by),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 class FakeSession:
@@ -131,15 +170,22 @@ class FakeSession:
         entity = statement.column_descriptions[0]["entity"]
         column_name = statement.column_descriptions[0]["name"]
         if entity is Account and column_name == "id":
-            self.external_lookups += 1
-            return next(
-                (
-                    account.id
-                    for account in self.accounts.values()
-                    if account.account_number == "ACC1001" and account.is_system
-                ),
-                None,
+            if "account_number" in str(statement):
+                self.external_lookups += 1
+                return next(
+                    (
+                        account.id
+                        for account in self.accounts.values()
+                        if account.account_number == "ACC1001" and account.is_system
+                    ),
+                    None,
+                )
+            account_id = next(
+                parameter
+                for parameter in statement.compile().params.values()
+                if type(parameter) is int
             )
+            return account_id if account_id in self.accounts else None
         if entity is User and column_name == "role":
             return self.role
         if entity is AccountMember and column_name == "user_id":
@@ -177,9 +223,11 @@ class FakeSession:
         self.added.extend(instances)
 
     def flush(self) -> None:
-        for instance in self.added:
+        for index, instance in enumerate(self.added):
             if isinstance(instance, Transaction) and instance.id is None:
                 instance.id = uuid.uuid4()
+            elif isinstance(instance, LedgerEntry) and instance.id is None:
+                instance.id = 100 + index
 
     def commit(self) -> None:
         self.committed = True
@@ -287,6 +335,11 @@ def test_post_movement_writes_balanced_ledger_and_audit(
         (entry.direction, entry.account_id, entry.balance_after_paise)
         for entry in entries
     ] == directions
+    for entry in entries:
+        assert entry.created_at.tzinfo is not None
+        assert entry.hash == _expected_entry_hash(entry)
+    assert accounts[entries[0].account_id].last_entry_hash == entries[0].hash
+    assert accounts[entries[1].account_id].last_entry_hash == entries[1].hash
     audit = next(item for item in db.added if isinstance(item, AuditLog))
     assert audit.action == kind
     assert db.committed
@@ -330,6 +383,39 @@ def test_same_key_and_request_replays_response_without_moving_money() -> None:
         item.action for item in db.added if isinstance(item, AuditLog)
     ] == ["TRANSFER", "IDEMPOTENT_REPLAY"]
     assert db.committed
+
+
+def test_repeated_movement_chains_to_previous_account_hash() -> None:
+    accounts = [
+        _account(1, "ACC1001", -100, is_system=True),
+        _account(2, "ACC0002", 100),
+    ]
+    db = FakeSession(accounts, member_account_ids={2})
+    actor = _actor()
+
+    post_movement(
+        db, actor, "WITHDRAWAL", 2, None, 10, "withdrawal_chain_01"  # type: ignore[arg-type]
+    )
+    first_entry = next(
+        item
+        for item in db.added
+        if isinstance(item, LedgerEntry) and item.account_id == 2
+    )
+    post_movement(
+        db, actor, "WITHDRAWAL", 2, None, 10, "withdrawal_chain_02"  # type: ignore[arg-type]
+    )
+    account_entries = [
+        item
+        for item in db.added
+        if isinstance(item, LedgerEntry) and item.account_id == 2
+    ]
+
+    assert account_entries[1].prev_hash == first_entry.hash
+    assert account_entries[1].hash == _expected_entry_hash(account_entries[1])
+    assert accounts[1].last_entry_hash == account_entries[1].hash
+    assert verify_chain(
+        FakeVerifySession(account_entries), 2
+    ) is None  # type: ignore[arg-type]
 
 
 def test_idempotency_keys_are_scoped_per_user() -> None:
@@ -637,6 +723,75 @@ def test_frozen_account_is_rejected_before_movement() -> None:
 
     assert result.response_status == AccountFrozenError.status_code
     assert db.committed
+
+
+def _verified_entry(
+    *,
+    entry_id: int,
+    previous_hash: str | None,
+    created_at: datetime,
+    balance_after_paise: int,
+) -> LedgerEntry:
+    txn_id = uuid.uuid5(uuid.NAMESPACE_OID, f"txn-{entry_id}")
+    initiated_by = uuid.uuid5(uuid.NAMESPACE_OID, "actor")
+    entry = LedgerEntry(
+        id=entry_id,
+        txn_id=txn_id,
+        account_id=7,
+        direction="CREDIT",
+        amount_paise=10,
+        balance_after_paise=balance_after_paise,
+        initiated_by=initiated_by,
+        created_at=created_at,
+        prev_hash=previous_hash,
+        hash="",
+    )
+    entry.hash = _expected_entry_hash(entry)
+    return entry
+
+
+def test_verify_chain_accepts_valid_chain_and_detects_tampered_entry() -> None:
+    timestamp = datetime(2026, 11, 8, 8, 0, tzinfo=UTC)
+    first = _verified_entry(
+        entry_id=11,
+        previous_hash=None,
+        created_at=timestamp,
+        balance_after_paise=10,
+    )
+    second = _verified_entry(
+        entry_id=15,
+        previous_hash=first.hash,
+        created_at=timestamp,
+        balance_after_paise=20,
+    )
+    db = FakeVerifySession([second, first])
+
+    assert verify_chain(db, 7) is None  # type: ignore[arg-type]
+
+    second.balance_after_paise = 21
+    assert verify_chain(db, 7) == second.id  # type: ignore[arg-type]
+
+
+def test_verify_chain_detects_broken_previous_hash_link() -> None:
+    timestamp = datetime(2026, 11, 8, 8, 0, tzinfo=UTC)
+    first = _verified_entry(
+        entry_id=11,
+        previous_hash=None,
+        created_at=timestamp,
+        balance_after_paise=10,
+    )
+    second = _verified_entry(
+        entry_id=15,
+        previous_hash="wrong-previous-hash",
+        created_at=timestamp,
+        balance_after_paise=20,
+    )
+
+    assert verify_chain(FakeVerifySession([first, second]), 7) == second.id  # type: ignore[arg-type]
+
+
+def test_verify_chain_accepts_empty_account_history() -> None:
+    assert verify_chain(FakeVerifySession([]), 7) is None  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(

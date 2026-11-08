@@ -2,9 +2,10 @@ import hashlib
 import json
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal
 
-from sqlalchemy import select, text
+from sqlalchemy import case, func, select, text
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -25,13 +26,145 @@ from app.services.ledger_errors import (
 )
 
 MovementKind = Literal["DEPOSIT", "WITHDRAWAL", "TRANSFER"]
-EXTERNAL_ACCOUNT_NUMBER = "ACC1001"
+EXTERNAL_ACCOUNT_NUMBER = "ACC1000"
 
 
 @dataclass(frozen=True)
 class MovementResult:
     response_status: int
     response_body: dict[str, object]
+
+
+@dataclass(frozen=True)
+class AccountBalanceMismatch:
+    account_id: int
+    account_number: str
+    balance_paise: int
+    ledger_balance_paise: int
+
+
+@dataclass(frozen=True)
+class NegativeAccountBalance:
+    account_id: int
+    account_number: str
+    balance_paise: int
+
+
+@dataclass(frozen=True)
+class TransactionBalanceMismatch:
+    transaction_id: uuid.UUID
+    debits_paise: int
+    credits_paise: int
+
+
+@dataclass(frozen=True)
+class ReconciliationResult:
+    total_balance_paise: int
+    account_mismatches: tuple[AccountBalanceMismatch, ...]
+    negative_accounts: tuple[NegativeAccountBalance, ...]
+    transaction_mismatches: tuple[TransactionBalanceMismatch, ...]
+
+
+def sum_account_balances(
+    db_session: Session,
+    account_ids: list[int],
+) -> int:
+    if not account_ids:
+        return 0
+    total = db_session.scalar(
+        select(func.coalesce(func.sum(Account.balance_paise), 0)).where(
+            Account.id.in_(account_ids)
+        )
+    )
+    return int(total)
+
+
+def reconcile_ledger(db_session: Session) -> ReconciliationResult:
+    total_balance = db_session.scalar(
+        select(func.coalesce(func.sum(Account.balance_paise), 0))
+    )
+    ledger_net = case(
+        (LedgerEntry.direction == "CREDIT", LedgerEntry.amount_paise),
+        (LedgerEntry.direction == "DEBIT", -LedgerEntry.amount_paise),
+        else_=0,
+    )
+    account_rows = db_session.execute(
+        select(
+            Account.id,
+            Account.account_number,
+            Account.balance_paise,
+            func.coalesce(func.sum(ledger_net), 0).label("ledger_balance_paise"),
+        )
+        .outerjoin(LedgerEntry, LedgerEntry.account_id == Account.id)
+        .group_by(Account.id)
+        .order_by(Account.id)
+    ).all()
+    account_mismatches = tuple(
+        AccountBalanceMismatch(
+            account_id=account_id,
+            account_number=account_number,
+            balance_paise=int(balance_paise),
+            ledger_balance_paise=int(ledger_balance_paise),
+        )
+        for account_id, account_number, balance_paise, ledger_balance_paise in account_rows
+        if int(balance_paise) != int(ledger_balance_paise)
+    )
+    negative_rows = db_session.execute(
+        select(Account.id, Account.account_number, Account.balance_paise)
+        .where(Account.is_system.is_(False), Account.balance_paise < 0)
+        .order_by(Account.id)
+    ).all()
+    negative_accounts = tuple(
+        NegativeAccountBalance(
+            account_id=account_id,
+            account_number=account_number,
+            balance_paise=int(balance_paise),
+        )
+        for account_id, account_number, balance_paise in negative_rows
+    )
+    debit_total = func.coalesce(
+        func.sum(
+            case(
+                (LedgerEntry.direction == "DEBIT", LedgerEntry.amount_paise),
+                else_=0,
+            )
+        ),
+        0,
+    )
+    credit_total = func.coalesce(
+        func.sum(
+            case(
+                (LedgerEntry.direction == "CREDIT", LedgerEntry.amount_paise),
+                else_=0,
+            )
+        ),
+        0,
+    )
+    transaction_rows = db_session.execute(
+        select(
+            Transaction.id,
+            debit_total.label("debits_paise"),
+            credit_total.label("credits_paise"),
+        )
+        .outerjoin(LedgerEntry, LedgerEntry.txn_id == Transaction.id)
+        .group_by(Transaction.id)
+        .order_by(Transaction.id)
+    ).all()
+    transaction_mismatches = tuple(
+        TransactionBalanceMismatch(
+            transaction_id=transaction_id,
+            debits_paise=int(debits_paise),
+            credits_paise=int(credits_paise),
+        )
+        for transaction_id, debits_paise, credits_paise in transaction_rows
+        if int(debits_paise) != int(credits_paise)
+    )
+    return ReconciliationResult(
+        total_balance_paise=int(total_balance),
+        account_mismatches=account_mismatches,
+        negative_accounts=negative_accounts,
+        transaction_mismatches=transaction_mismatches,
+    )
 
 
 def _request_hash(
@@ -103,11 +236,21 @@ def _log_refused_attempt(
     db_session: Session,
     *,
     actor_id: uuid.UUID,
+    account_id: int | None,
     kind: MovementKind,
     amount_paise: int,
     key: str,
     reason_code: str,
 ) -> None:
+    stored_account_id = (
+        account_id
+        if type(account_id) is int and 0 < account_id < 2**63
+        else None
+    )
+    if stored_account_id is not None:
+        stored_account_id = db_session.scalar(
+            select(Account.id).where(Account.id == stored_account_id)
+        )
     stored_amount = (
         amount_paise
         if type(amount_paise) is int and -(2**63) <= amount_paise < 2**63
@@ -119,17 +262,26 @@ def _log_refused_attempt(
             INSERT INTO refused_attempts (
                 user_id, account_id, type, amount_paise, reason_code, idempotency_key
             )
-            VALUES (:user_id, NULL, :kind, :amount_paise, :reason_code, :key)
+            VALUES (:user_id, :account_id, :kind, :amount_paise, :reason_code, :key)
             """
         ),
         {
             "user_id": actor_id,
+            "account_id": stored_account_id,
             "kind": kind,
             "amount_paise": stored_amount,
             "reason_code": reason_code,
             "key": key,
         },
     )
+
+
+def _attempt_account_id(
+    kind: MovementKind,
+    from_account_id: int | None,
+    to_account_id: int | None,
+) -> int | None:
+    return to_account_id if kind == "DEPOSIT" else from_account_id
 
 
 def _movement_response(transaction: Transaction) -> MovementResult:
@@ -253,6 +405,8 @@ def _perform_movement(
 
     debit_balance = debit_account.balance_paise - amount_paise
     credit_balance = credit_account.balance_paise + amount_paise
+    debit_created_at = datetime.now(UTC)
+    credit_created_at = datetime.now(UTC)
     entries = (
         LedgerEntry(
             txn_id=txn.id,
@@ -261,6 +415,7 @@ def _perform_movement(
             amount_paise=amount_paise,
             balance_after_paise=debit_balance,
             initiated_by=actor.id,
+            created_at=debit_created_at,
             prev_hash=debit_account.last_entry_hash,
             hash=_entry_hash(
                 txn_id=txn.id,
@@ -270,6 +425,7 @@ def _perform_movement(
                 balance_after_paise=debit_balance,
                 initiated_by=actor.id,
                 prev_hash=debit_account.last_entry_hash,
+                created_at=debit_created_at,
             ),
         ),
         LedgerEntry(
@@ -279,6 +435,7 @@ def _perform_movement(
             amount_paise=amount_paise,
             balance_after_paise=credit_balance,
             initiated_by=actor.id,
+            created_at=credit_created_at,
             prev_hash=credit_account.last_entry_hash,
             hash=_entry_hash(
                 txn_id=txn.id,
@@ -288,6 +445,7 @@ def _perform_movement(
                 balance_after_paise=credit_balance,
                 initiated_by=actor.id,
                 prev_hash=credit_account.last_entry_hash,
+                created_at=credit_created_at,
             ),
         ),
     )
@@ -321,20 +479,22 @@ def _entry_hash(
     balance_after_paise: int,
     initiated_by: uuid.UUID,
     prev_hash: str | None,
+    created_at: datetime,
 ) -> str:
     payload = json.dumps(
         {
+            "prev_hash": prev_hash,
             "txn_id": str(txn_id),
             "account_id": account_id,
             "direction": direction,
             "amount_paise": amount_paise,
             "balance_after_paise": balance_after_paise,
+            "created_at": created_at.astimezone(UTC).isoformat(),
             "initiated_by": str(initiated_by),
-            "prev_hash": prev_hash,
         },
         sort_keys=True,
         separators=(",", ":"),
-    ).encode()
+    ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -410,6 +570,11 @@ def post_movement(
                 _log_refused_attempt(
                     db_session,
                     actor_id=actor.id,
+                    account_id=_attempt_account_id(
+                        kind,
+                        from_account_id,
+                        to_account_id,
+                    ),
                     kind=kind,
                     amount_paise=amount_paise,
                     key=idempotency_key,
@@ -432,6 +597,11 @@ def post_movement(
                 _log_refused_attempt(
                     db_session,
                     actor_id=actor.id,
+                    account_id=_attempt_account_id(
+                        kind,
+                        from_account_id,
+                        to_account_id,
+                    ),
                     kind=kind,
                     amount_paise=amount_paise,
                     key=idempotency_key,
@@ -470,6 +640,11 @@ def post_movement(
             _log_refused_attempt(
                 db_session,
                 actor_id=actor.id,
+                account_id=_attempt_account_id(
+                    kind,
+                    from_account_id,
+                    to_account_id,
+                ),
                 kind=kind,
                 amount_paise=amount_paise,
                 key=idempotency_key,

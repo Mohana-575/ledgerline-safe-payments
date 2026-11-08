@@ -32,8 +32,15 @@ Install backend dependencies and start the API:
 Set-Location backend
 uv sync
 uv run alembic upgrade head
+uv run python -m app.scripts.seed
 uv run uvicorn app.main:app --reload
 ```
+
+The seed command creates the example admin, auditor, and account-holder users,
+the holder's Personal and Savings accounts, and funds them through the ledger.
+Set `SEED_PASSWORD` before running it to use one password for newly created
+users. If it is unset, unique passwords are generated and printed once; save
+them securely. The command can be rerun safely.
 
 The API health check is available at `GET /health`.
 
