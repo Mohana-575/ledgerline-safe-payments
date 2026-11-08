@@ -7,6 +7,7 @@ from app.core.config import get_settings
 
 engine = create_engine(
     get_settings().DATABASE_URL,
+    isolation_level="READ COMMITTED",
     pool_size=20,
     pool_pre_ping=True,
 )
