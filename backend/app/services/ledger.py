@@ -332,6 +332,23 @@ def _perform_movement(
         from_account_id is None or to_account_id is None
     ):
         raise AccountNotFoundError("Transfer source or destination account not found")
+    if kind == "TRANSFER":
+        destination_is_system = db_session.scalar(
+            select(Account.is_system).where(Account.id == to_account_id)
+        )
+        if destination_is_system:
+            raise ForbiddenMovementError(
+                "Transfers to system accounts are not allowed"
+            )
+    if kind in {"WITHDRAWAL", "TRANSFER"}:
+        source_membership = db_session.scalar(
+            select(AccountMember.user_id).where(
+                AccountMember.user_id == actor.id,
+                AccountMember.account_id == from_account_id,
+            )
+        )
+        if source_membership is None:
+            raise ForbiddenMovementError("Account membership is required")
 
     external_account_id: int | None = None
     if kind in {"DEPOSIT", "WITHDRAWAL"}:

@@ -137,6 +137,56 @@ def test_register_login_logout_and_current_user() -> None:
         app.dependency_overrides.pop(get_db)
 
 
+def test_unknown_email_uses_dummy_password_verification_and_generic_response(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    db = FakeAuthSession()
+    monkeypatch.setitem(auth_routes._RATE_LIMITS, "login", 10)
+    auth_routes._rate_attempts.clear()
+    app.dependency_overrides[get_db] = lambda: db
+    try:
+        client = TestClient(app)
+        registration = client.post(
+            "/auth/register",
+            json={
+                "full_name": "A. Holder",
+                "email": "holder@example.com",
+                "password": "correct horse battery staple",
+            },
+        )
+        assert registration.status_code == 201
+        assert db.user is not None
+
+        verified_hashes: list[str] = []
+        real_verify_password = auth_routes.verify_password
+
+        def verify_and_record(password: str, password_hash: str) -> bool:
+            verified_hashes.append(password_hash)
+            return real_verify_password(password, password_hash)
+
+        monkeypatch.setattr(auth_routes, "verify_password", verify_and_record)
+        request = {"password": "wrong password"}
+        wrong_password = client.post(
+            "/auth/login",
+            json={"email": "holder@example.com", **request},
+        )
+        unknown_email = client.post(
+            "/auth/login",
+            json={"email": "missing@example.com", **request},
+        )
+
+        assert wrong_password.status_code == unknown_email.status_code == 401
+        assert wrong_password.json() == unknown_email.json()
+        assert len(verified_hashes) == 2
+        assert verified_hashes == [
+            db.user.password_hash,
+            auth_routes._DUMMY_PASSWORD_HASH,
+        ]
+    finally:
+        app.dependency_overrides.pop(get_db)
+        auth_routes._rate_attempts.clear()
+
+
 def test_login_is_rate_limited(monkeypatch: MonkeyPatch) -> None:
     db = FakeAuthSession()
 

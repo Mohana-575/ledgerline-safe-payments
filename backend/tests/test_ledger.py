@@ -111,10 +111,13 @@ class FakeSession:
         *,
         role: str = "ACCOUNT_HOLDER",
         member_account_ids: set[int] | None = None,
+        membership_results: list[uuid.UUID | None] | None = None,
     ) -> None:
         self.accounts = {account.id: account for account in accounts}
         self.role = role
         self.member_account_ids = member_account_ids or set()
+        self.membership_results = membership_results
+        self.membership_statements: list[str] = []
         self.external_lookups = 0
         self.account_lock_statement: Select[tuple[Account]] | None = None
         self.added: list[object] = []
@@ -187,9 +190,20 @@ class FakeSession:
                 if type(parameter) is int
             )
             return account_id if account_id in self.accounts else None
+        if entity is Account and column_name == "is_system":
+            account_id = next(
+                parameter
+                for parameter in statement.compile().params.values()
+                if type(parameter) is int
+            )
+            account = self.accounts.get(account_id)
+            return account.is_system if account is not None else None
         if entity is User and column_name == "role":
             return self.role
         if entity is AccountMember and column_name == "user_id":
+            self.membership_statements.append(str(statement))
+            if self.membership_results is not None:
+                return self.membership_results.pop(0)
             account_id = next(
                 parameter
                 for parameter in statement.compile().params.values()
@@ -672,6 +686,57 @@ def test_membership_is_required_for_debits_and_holder_deposits(
     assert result.response_status == ForbiddenMovementError.status_code
     assert db.committed
     assert len(db.refused_attempts) == 1
+
+
+def test_nonmember_withdrawal_is_refused_before_account_row_lock() -> None:
+    db = FakeSession(
+        [
+            _account(1, "ACC1001", -100, is_system=True),
+            _account(2, "ACC0002", 100),
+        ]
+    )
+
+    result = post_movement(
+        db,
+        _actor(),
+        "WITHDRAWAL",
+        2,
+        None,
+        25,
+        "prelock_membership_key",
+    )
+
+    assert result.response_status == ForbiddenMovementError.status_code
+    assert db.committed
+    assert db.account_lock_statement is None
+    assert len(db.membership_statements) == 1
+    assert "FOR UPDATE" not in db.membership_statements[0]
+
+
+def test_withdrawal_rechecks_membership_after_account_row_lock() -> None:
+    db = FakeSession(
+        [
+            _account(1, "ACC1001", -100, is_system=True),
+            _account(2, "ACC0002", 100),
+        ],
+        membership_results=[uuid.uuid4(), None],
+    )
+
+    result = post_movement(
+        db,
+        _actor(),
+        "WITHDRAWAL",
+        2,
+        None,
+        25,
+        "membership_recheck_key",
+    )
+
+    assert result.response_status == ForbiddenMovementError.status_code
+    assert db.committed
+    assert db.account_lock_statement is not None
+    assert len(db.membership_statements) == 2
+    assert "FOR UPDATE" in db.membership_statements[1]
 
 
 def test_transfer_source_membership_is_required_but_destination_membership_is_not() -> None:

@@ -111,6 +111,45 @@ async def test_holder_cannot_withdraw_or_transfer_from_another_holders_account(
 
 
 @pytest.mark.asyncio
+async def test_withdrawal_hides_nonexistent_and_nonmember_account_difference(
+    db_session: Session,
+    uvicorn_server: str,
+) -> None:
+    holder = make_user(db_session)
+    other_holder = make_user(db_session)
+    other_account = make_account(db_session, other_holder)
+    db_session.commit()
+    nonexistent_account_id = 9_000_000_000_000_000_000
+
+    client = _client(uvicorn_server, holder)
+    try:
+        nonexistent = await client.post(
+            "/withdrawals",
+            json={
+                "account_id": nonexistent_account_id,
+                "amount_paise": 1_000,
+            },
+            headers={"Idempotency-Key": "missing-account-withdrawal"},
+        )
+        nonmember = await client.post(
+            "/withdrawals",
+            json={"account_id": other_account.id, "amount_paise": 1_000},
+            headers={"Idempotency-Key": "nonmember-account-withdrawal"},
+        )
+    finally:
+        await _close(client)
+
+    nonexistent_body = nonexistent.json()
+    nonmember_body = nonmember.json()
+    assert nonexistent.status_code == nonmember.status_code, (
+        f"nonexistent={nonexistent.status_code} {nonexistent_body}; "
+        f"nonmember={nonmember.status_code} {nonmember_body}"
+    )
+    assert nonexistent_body["code"] == nonmember_body["code"]
+    assert nonexistent_body["message"] == nonmember_body["message"]
+
+
+@pytest.mark.asyncio
 async def test_holder_cannot_deposit_into_nonmember_account(
     db_session: Session,
     uvicorn_server: str,
@@ -144,6 +183,68 @@ async def test_holder_cannot_deposit_into_nonmember_account(
             account_id=account_y.id,
         )
         == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_holder_cannot_transfer_to_external_system_account(
+    db_session: Session,
+    uvicorn_server: str,
+) -> None:
+    admin = make_user(db_session, role="ADMIN")
+    holder = make_user(db_session)
+    source_account = make_account(db_session, holder)
+    external_account = db_session.scalar(
+        select(Account).where(
+            Account.account_number == "ACC1000",
+            Account.is_system.is_(True),
+        )
+    )
+    assert external_account is not None
+    db_session.commit()
+    fund_account(db_session, admin, source_account, 10_000)
+
+    balances_before = dict(
+        db_session.execute(
+            select(Account.id, Account.balance_paise)
+        ).all()
+    )
+    ledger_before = _ledger_count(db_session)
+    refusals_before = _refusal_count(
+        db_session,
+        user_id=holder.id,
+        account_id=source_account.id,
+    )
+
+    client = _client(uvicorn_server, holder)
+    try:
+        response = await client.post(
+            "/transfers",
+            json={
+                "from_account_id": source_account.id,
+                "to_account_id": external_account.id,
+                "amount_paise": 1_000,
+            },
+            headers={"Idempotency-Key": "transfer-to-external"},
+        )
+    finally:
+        await _close(client)
+
+    balances_after = dict(
+        db_session.execute(
+            select(Account.id, Account.balance_paise)
+        ).all()
+    )
+    assert response.status_code in {403, 422}
+    assert balances_after == balances_before
+    assert _ledger_count(db_session) == ledger_before
+    assert (
+        _refusal_count(
+            db_session,
+            user_id=holder.id,
+            account_id=source_account.id,
+        )
+        == refusals_before + 1
     )
 
 

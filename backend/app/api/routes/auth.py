@@ -27,6 +27,10 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 _EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _RATE_WINDOW_SECONDS = 60
 _RATE_LIMITS = {"login": 10, "register": 5}
+_DUMMY_PASSWORD_HASH = (
+    "$argon2id$v=19$m=65536,t=3,p=4$"
+    "SJ9F0kAK+0uQZzZw+LrPJg$3TkVgD390ElN+AMFo+6xqbTn4/cufHgVo2LK5/4H+L0"
+)
 _rate_lock = threading.Lock()
 _rate_attempts: dict[tuple[str, str], deque[float]] = defaultdict(deque)
 
@@ -190,10 +194,11 @@ def login(
     db: Annotated[Session, Depends(get_db)],
 ) -> User:
     user = db.scalar(select(User).where(User.email == body.email))
-    if user is None or not verify_password(
-        body.password,
-        user.password_hash if user is not None else "",
-    ):
+    password_hash = (
+        user.password_hash if user is not None else _DUMMY_PASSWORD_HASH
+    )
+    password_is_valid = verify_password(body.password, password_hash)
+    if user is None or not password_is_valid:
         _add_audit_log(
             db,
             action="LOGIN_FAILED",
