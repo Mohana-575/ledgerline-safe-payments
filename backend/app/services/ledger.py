@@ -306,7 +306,7 @@ def _replay_authorization_error(
     actor_id: uuid.UUID,
 ) -> LedgerError | None:
     current_role = db_session.scalar(
-        select(User.role).where(User.id == actor_id).with_for_update()
+        select(User.role).where(User.id == actor_id).with_for_update(read=True)
     )
     if current_role not in {"ADMIN", "ACCOUNT_HOLDER"}:
         return ForbiddenMovementError("Role is not allowed to move money")
@@ -374,7 +374,7 @@ def _perform_movement(
             raise AccountFrozenError("Account is not active")
 
     current_role = db_session.scalar(
-        select(User.role).where(User.id == actor.id).with_for_update()
+        select(User.role).where(User.id == actor.id).with_for_update(read=True)
     )
     if current_role not in {"ADMIN", "ACCOUNT_HOLDER"}:
         raise ForbiddenMovementError("Role is not allowed to move money")
