@@ -3,10 +3,11 @@
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
-revision: str = "0004_move_external_account_number"
-down_revision: str | None = "0003_idempotency_pending_response"
+revision: str = "0004_external_account_number"
+down_revision: str | None = "0003_idempotency_pending"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

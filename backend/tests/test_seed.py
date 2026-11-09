@@ -11,6 +11,7 @@ os.environ.setdefault(
 os.environ.setdefault("JWT_SECRET", "test-secret-for-ledgerline-32-bytes")
 
 import pytest
+
 from app.models.account import Account
 from app.models.user import User
 from app.scripts import seed as seed_script

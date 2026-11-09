@@ -44,6 +44,13 @@ them securely. The command can be rerun safely.
 
 The API health check is available at `GET /health`.
 
+## Backend tests
+
+Run the backend tests from `backend/` with `uv run pytest`. The test session
+drops and recreates the `public` schema in `ledgerline_test`, then runs Alembic
+migrations once. Configure `TEST_DATABASE_URL` to point to that database before
+running tests; do not point it at a development or production database.
+
 The optional least-privilege database role can be created by running
 `psql -d ledgerline -f scripts/create_app_role.sql` from the repository root.
 The script prompts for the role password.

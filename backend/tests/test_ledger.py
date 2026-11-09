@@ -14,6 +14,9 @@ os.environ.setdefault(
 os.environ.setdefault("JWT_SECRET", "test-secret-for-ledgerline-32-bytes")
 
 import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import Select
+
 from app.api.dependencies import current_user
 from app.db.session import get_db
 from app.main import app
@@ -32,8 +35,6 @@ from app.services.ledger_errors import (
     InvalidAmountError,
 )
 from app.services.verify import verify_chain
-from fastapi.testclient import TestClient
-from sqlalchemy import Select
 
 
 class FakeResult:

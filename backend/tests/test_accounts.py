@@ -11,6 +11,9 @@ os.environ.setdefault(
 os.environ.setdefault("JWT_SECRET", "test-secret-for-ledgerline-32-bytes")
 
 import pytest
+from fastapi import HTTPException
+from fastapi.testclient import TestClient
+
 from app.api.dependencies import current_user
 from app.api.routes.accounts import _next_account_number, _visible_account
 from app.db.session import get_db
@@ -20,8 +23,6 @@ from app.models.account_member import AccountMember
 from app.models.audit_log import AuditLog
 from app.models.user import User
 from app.schemas.accounts import AccountCreateRequest, MemberAssignRequest
-from fastapi import HTTPException
-from fastapi.testclient import TestClient
 
 
 class FakeSequenceSession:

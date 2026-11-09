@@ -11,6 +11,9 @@ os.environ.setdefault(
 )
 os.environ.setdefault("JWT_SECRET", "test-secret-for-ledgerline-32-bytes")
 
+from fastapi.testclient import TestClient
+from sqlalchemy.dialects import postgresql
+
 from app.api.dependencies import current_user
 from app.api.routes.statements import _statement_query
 from app.db.session import get_db
@@ -18,8 +21,6 @@ from app.main import app
 from app.models.account import Account
 from app.models.audit_log import AuditLog
 from app.models.user import User
-from fastapi.testclient import TestClient
-from sqlalchemy.dialects import postgresql
 
 
 class FakeResult:
