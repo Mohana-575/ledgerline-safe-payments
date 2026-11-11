@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, type FormEvent } from 'react'
 import { CheckCircle2, CircleAlert, Play, ShieldCheck } from 'lucide-react'
-import { useAuth } from '../auth/useAuth'
 import { ErrorState, LoadingState } from '../components/States'
 import { fetchAccounts, type Account } from '../lib/accounts'
 import { apiRequest } from '../lib/api'
