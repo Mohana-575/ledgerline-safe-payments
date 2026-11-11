@@ -101,25 +101,6 @@ function PageIntro({
   )
 }
 
-function WorkspacePage({
-  title,
-  description,
-  emptyTitle,
-  emptyDescription,
-}: {
-  title: string
-  description: string
-  emptyTitle: string
-  emptyDescription: string
-}) {
-  return (
-    <>
-      <PageIntro title={title} description={description} />
-      <EmptyState title={emptyTitle} description={emptyDescription} />
-    </>
-  )
-}
-
 function roleLabel(role: UserRole): string {
   return role
     .split('_')

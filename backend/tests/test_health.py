@@ -1,5 +1,7 @@
 import os
 
+from pytest import MonkeyPatch
+
 os.environ.setdefault(
     "DATABASE_URL",
     "postgresql+psycopg://ledgerline:ledgerline_dev_password@localhost:5432/ledgerline",
@@ -12,6 +14,7 @@ os.environ.setdefault("JWT_SECRET", "test-secret-for-ledgerline")
 
 from fastapi.testclient import TestClient
 
+from app.core.config import Settings
 from app.db.session import get_db
 from app.main import app
 
@@ -25,6 +28,20 @@ class FakeSession:
         self.statement = str(statement)
         if self.fail:
             raise RuntimeError("database unavailable")
+
+
+def test_runtime_settings_do_not_require_test_database_url(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TEST_DATABASE_URL", raising=False)
+
+    settings = Settings(
+        _env_file=None,
+        DATABASE_URL="postgresql+psycopg://user:pass@localhost/app",
+        JWT_SECRET="a-test-secret-long-enough-for-settings",
+    )
+
+    assert settings.TEST_DATABASE_URL is None
 
 
 def test_health_check_executes_select_one() -> None:

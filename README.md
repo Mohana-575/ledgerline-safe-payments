@@ -66,6 +66,28 @@ npm install
 npm run dev
 ```
 
+## Render and Neon deployment
+
+The root `Dockerfile` builds the frontend and backend into one non-root image.
+Render uses `render.yaml` and checks `GET /health`. The Docker command applies
+Alembic migrations before starting FastAPI. It does not seed the database.
+
+Set `DATABASE_URL` to Neon’s pooled connection URL (the hostname includes
+`-pooler`) using SQLAlchemy’s `postgresql+psycopg://` driver and TLS, such as
+`sslmode=require`. Set `MIGRATION_DATABASE_URL` to the direct, non-pooled Neon
+URL for schema migrations. Render generates `JWT_SECRET`; neither database URL
+nor the secret belongs in source control. `TEST_DATABASE_URL` is optional at
+application startup but pytest requires it to point to a separate
+non-production database named `ledgerline_test`.
+
+On Render Free, startup migrations run in the single service instance before
+Uvicorn; expect deployment downtime and keep migrations backward-compatible.
+On a paid multi-instance service, use Render’s pre-deploy command for
+`alembic upgrade head` and set the service start command to
+`uvicorn app.main:app --host 0.0.0.0 --port $PORT`. This runs migrations once
+before new instances start and avoids concurrent per-instance migration runs.
+Use a Neon backup/branch before schema changes.
+
 ## Validation
 
 Run backend checks from `backend/`:

@@ -36,12 +36,18 @@ else:
             "Configure TEST_DATABASE_URL in the environment or repository .env"
         ) from exc
 
+if not TEST_DATABASE_URL:
+    raise RuntimeError(
+        "Configure TEST_DATABASE_URL in the environment or repository .env"
+    )
+
 if make_url(TEST_DATABASE_URL).database != "ledgerline_test":
     raise RuntimeError(
         "TEST_DATABASE_URL must point to the ledgerline_test database"
     )
 
 os.environ["TEST_DATABASE_URL"] = TEST_DATABASE_URL
+os.environ["MIGRATION_DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["JWT_SECRET"] = "test-secret-for-ledgerline-32-bytes"
 os.environ["COOKIE_SECURE"] = "false"
@@ -60,6 +66,7 @@ def migrated_test_database() -> Iterator[None]:
     migration_environment = os.environ.copy()
     migration_environment["DATABASE_URL"] = TEST_DATABASE_URL
     migration_environment["TEST_DATABASE_URL"] = TEST_DATABASE_URL
+    migration_environment["MIGRATION_DATABASE_URL"] = TEST_DATABASE_URL
     subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "head"],
         cwd=BACKEND_ROOT,
@@ -87,6 +94,7 @@ def uvicorn_server(migrated_test_database: None) -> Iterator[str]:
     server_environment = os.environ.copy()
     server_environment["DATABASE_URL"] = TEST_DATABASE_URL
     server_environment["TEST_DATABASE_URL"] = TEST_DATABASE_URL
+    server_environment["MIGRATION_DATABASE_URL"] = TEST_DATABASE_URL
     server_environment["COOKIE_SECURE"] = "false"
     with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as server_log:
         process = subprocess.Popen(

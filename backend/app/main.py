@@ -1,5 +1,8 @@
-from fastapi import FastAPI
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.routes.accounts import router as accounts_router
@@ -16,6 +19,8 @@ from app.core.exception_handlers import (
 )
 from app.services.ledger_errors import LedgerError
 
+FRONTEND_DIST = Path(__file__).resolve().parent / "static"
+
 app = FastAPI(
     title="LedgerLine API",
     exception_handlers={
@@ -31,3 +36,39 @@ app.include_router(auth_router)
 app.include_router(health_router)
 app.include_router(movements_router)
 app.include_router(statements_router)
+
+if FRONTEND_DIST.is_dir():
+
+    @app.middleware("http")
+    async def serve_spa_navigation(
+        request: Request, call_next
+    ) -> Response:
+        path = request.url.path
+        is_frontend_navigation = (
+            request.method == "GET"
+            and "text/html" in request.headers.get("accept", "").lower()
+            and path not in {"/health", "/docs", "/openapi.json", "/redoc"}
+            and not path.startswith("/api/")
+        )
+        if is_frontend_navigation:
+            return FileResponse(FRONTEND_DIST / "index.html")
+        return await call_next(request)
+
+    @app.get("/", include_in_schema=False)
+    def serve_frontend_index() -> FileResponse:
+        return FileResponse(FRONTEND_DIST / "index.html")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def serve_frontend_path(path: str, request: Request) -> FileResponse:
+        frontend_root = FRONTEND_DIST.resolve()
+        requested_file = (frontend_root / path).resolve()
+        try:
+            requested_file.relative_to(frontend_root)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Not found") from None
+
+        if requested_file.is_file():
+            return FileResponse(requested_file)
+        if "text/html" in request.headers.get("accept", "").lower():
+            return FileResponse(frontend_root / "index.html")
+        raise HTTPException(status_code=404, detail="Not found")

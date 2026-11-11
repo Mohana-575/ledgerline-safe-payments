@@ -9,6 +9,12 @@ default, requests use the `/api` prefix and the Vite development proxy forwards
 them to the backend. The authentication provider loads the current session from
 `GET /auth/me`.
 
+Production builds default to an empty `VITE_API_BASE_URL`, so requests use the
+same origin as the FastAPI-served frontend; development still defaults to `/api`
+and the Vite proxy. The backend serves the Vite build and falls back to
+`index.html` for browser-side routes. Keep the frontend and API on the same
+origin for the existing secure, strict-samesite authentication cookie.
+
 The Statements page loads the visible accounts from `GET /accounts` and fetches
 filtered, cursor-paginated activity from `GET /accounts/{id}/statement`.
 Account visibility is enforced by the API for each signed-in role.

@@ -15,7 +15,8 @@ class Settings(BaseSettings):
     )
 
     DATABASE_URL: str
-    TEST_DATABASE_URL: str
+    TEST_DATABASE_URL: str | None = None
+    MIGRATION_DATABASE_URL: str | None = None
     JWT_SECRET: str
     COOKIE_SECURE: bool = False
     MAX_AMOUNT_PAISE: int = Field(default=10_000_000, gt=0)

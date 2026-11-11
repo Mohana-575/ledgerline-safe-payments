@@ -17,10 +17,12 @@ from app.models import (  # noqa: F401
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
+settings = get_settings()
+database_url = settings.MIGRATION_DATABASE_URL or settings.DATABASE_URL
 
 config.set_main_option(
     "sqlalchemy.url",
-    get_settings().DATABASE_URL.replace("%", "%%"),
+    database_url.replace("%", "%%"),
 )
 
 # Interpret the config file for Python logging.
@@ -52,9 +54,8 @@ def run_migrations_offline() -> None:
     script output.
 
     """
-    url = get_settings().DATABASE_URL
     context.configure(
-        url=url,
+        url=database_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
