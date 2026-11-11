@@ -15,7 +15,9 @@ from app.models.ledger_entry import LedgerEntry
 from app.models.transaction import Transaction
 from app.models.user import User
 from app.schemas.admin import (
+    AdminUserResponse,
     AccountBalanceMismatchResponse,
+    DashboardAccount,
     DashboardResponse,
     DashboardTransaction,
     LedgerChainStatus,
@@ -28,6 +30,26 @@ from app.services.ledger import reconcile_ledger, sum_account_balances
 from app.services.verify import verify_chain
 
 router = APIRouter(tags=["admin"])
+
+
+@router.get("/admin/users", response_model=list[AdminUserResponse])
+def list_admin_users(
+    db: Annotated[Session, Depends(get_db)],
+    _actor: Annotated[User, Depends(require_roles("ADMIN"))],
+) -> list[User]:
+    return list(
+        db.scalars(select(User).order_by(User.full_name, User.id)).all()
+    )
+
+
+@router.get("/users", response_model=list[AdminUserResponse])
+def list_users(
+    db: Annotated[Session, Depends(get_db)],
+    _actor: Annotated[User, Depends(require_roles("ADMIN", "AUDITOR"))],
+) -> list[User]:
+    return list(
+        db.scalars(select(User).order_by(User.full_name, User.id)).all()
+    )
 
 
 def _record_run(
@@ -164,6 +186,26 @@ def get_dashboard(
             select(AccountMember.account_id).where(AccountMember.user_id == user.id)
         ).all()
     )
+    accounts = (
+        db.scalars(
+            select(Account)
+            .where(Account.id.in_(account_ids))
+            .order_by(Account.id)
+        ).all()
+        if account_ids
+        else []
+    )
+    dashboard_accounts = [
+        DashboardAccount(
+            id=account.id,
+            account_number=account.account_number,
+            name=account.name,
+            type=account.type,
+            balance_paise=account.balance_paise,
+            status=account.status,
+        )
+        for account in accounts
+    ]
     transaction_count = 0
     recent_transactions: list[DashboardTransaction] = []
     if account_ids:
@@ -225,5 +267,6 @@ def get_dashboard(
         account_count=len(account_ids),
         transactions_last_30_days=transaction_count,
         role=user.role,
+        accounts=dashboard_accounts,
         recent_transactions=recent_transactions,
     )

@@ -1,3 +1,4 @@
+import argparse
 import os
 import secrets
 from dataclasses import dataclass
@@ -47,6 +48,8 @@ def _lock_seed(db: Session) -> None:
 def _get_or_create_users(
     db: Session,
     configured_password: str | None,
+    *,
+    reset_passwords: bool = False,
 ) -> tuple[dict[str, User], list[tuple[str, str]]]:
     users: dict[str, User] = {}
     generated_credentials: list[tuple[str, str]] = []
@@ -58,6 +61,12 @@ def _get_or_create_users(
                     f"{seed_user.email} exists with role {user.role}, "
                     f"expected {seed_user.role}"
                 )
+            if reset_passwords:
+                if configured_password is None:
+                    raise ValueError(
+                        "SEED_PASSWORD is required to reset seeded passwords"
+                    )
+                user.password_hash = hash_password(configured_password)
             users[seed_user.email] = user
             continue
 
@@ -160,13 +169,24 @@ def _assert_reconciled(db: Session) -> None:
         )
 
 
-def seed(db: Session, configured_password: str | None = None) -> None:
+def seed(
+    db: Session,
+    configured_password: str | None = None,
+    *,
+    reset_passwords: bool = False,
+) -> None:
     if configured_password == "":
         raise ValueError("SEED_PASSWORD must not be empty")
+    if reset_passwords and configured_password is None:
+        raise ValueError("SEED_PASSWORD is required to reset seeded passwords")
 
     _lock_seed(db)
     _ensure_external_account(db)
-    users, generated_credentials = _get_or_create_users(db, configured_password)
+    users, generated_credentials = _get_or_create_users(
+        db,
+        configured_password,
+        reset_passwords=reset_passwords,
+    )
     admin = users["admin@example.com"]
     holder = users["user1@example.com"]
     accounts = _ensure_seed_accounts(db, holder)
@@ -199,9 +219,22 @@ def seed(db: Session, configured_password: str | None = None) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Seed the application database.")
+    parser.add_argument(
+        "--reset-passwords",
+        action="store_true",
+        help="Reset passwords for existing seeded users using SEED_PASSWORD.",
+    )
+    args = parser.parse_args()
     configured_password = os.environ.get("SEED_PASSWORD")
+    if args.reset_passwords and configured_password is None:
+        parser.error("--reset-passwords requires SEED_PASSWORD to be set")
     with SessionLocal() as db:
-        seed(db, configured_password)
+        seed(
+            db,
+            configured_password,
+            reset_passwords=args.reset_passwords,
+        )
 
 
 if __name__ == "__main__":

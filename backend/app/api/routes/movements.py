@@ -91,6 +91,7 @@ def post_transfer(
         to_account_id=body.to_account_id,
         amount_paise=body.amount_paise,
         idempotency_key=_validate_idempotency_key(idempotency_key),
+        to_account_number=body.to_account_number,
     )
     return JSONResponse(
         status_code=result.response_status,

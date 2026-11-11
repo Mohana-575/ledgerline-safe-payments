@@ -79,7 +79,7 @@ def test_seed_uses_idempotent_deposits_with_requested_paise_amounts(
     monkeypatch.setattr(
         seed_script,
         "_get_or_create_users",
-        lambda _db, _password: (users, []),
+        lambda _db, _password, **_kwargs: (users, []),
     )
     monkeypatch.setattr(
         seed_script,
@@ -127,7 +127,7 @@ def test_seed_fails_explicitly_when_a_deposit_is_refused(
     monkeypatch.setattr(
         seed_script,
         "_get_or_create_users",
-        lambda _db, _password: (users, []),
+        lambda _db, _password, **_kwargs: (users, []),
     )
     monkeypatch.setattr(
         seed_script,
@@ -146,3 +146,80 @@ def test_seed_fails_explicitly_when_a_deposit_is_refused(
 
     with pytest.raises(RuntimeError, match="Deposit to ACC1001 failed: INVALID_AMOUNT"):
         seed_script.seed(db)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("reset_passwords", [False, True])
+def test_existing_seeded_users_are_reset_only_when_requested(
+    monkeypatch: pytest.MonkeyPatch,
+    reset_passwords: bool,
+) -> None:
+    users = [
+        User(
+            email="admin@example.com",
+            full_name="Administrator",
+            password_hash="old-admin-hash",
+            role="ADMIN",
+        ),
+        User(
+            email="auditor@example.com",
+            full_name="Auditor",
+            password_hash="old-auditor-hash",
+            role="AUDITOR",
+        ),
+        User(
+            email="user1@example.com",
+            full_name="User One",
+            password_hash="old-user-hash",
+            role="ACCOUNT_HOLDER",
+        ),
+    ]
+
+    class ExistingUsersSession:
+        def __init__(self) -> None:
+            self.users = iter(users)
+
+        def scalar(self, _statement):
+            return next(self.users)
+
+    hashed_passwords: list[str] = []
+
+    def hash_password(password: str) -> str:
+        hashed_passwords.append(password)
+        return f"fresh-hash-{len(hashed_passwords)}"
+
+    monkeypatch.setattr(seed_script, "hash_password", hash_password)
+
+    found_users, generated_credentials = seed_script._get_or_create_users(
+        ExistingUsersSession(),  # type: ignore[arg-type]
+        "fresh-seed-password",
+        reset_passwords=reset_passwords,
+    )
+
+    assert generated_credentials == []
+    assert set(found_users) == {
+        "admin@example.com",
+        "auditor@example.com",
+        "user1@example.com",
+    }
+    if reset_passwords:
+        assert hashed_passwords == ["fresh-seed-password"] * 3
+        assert [user.password_hash for user in users] == [
+            "fresh-hash-1",
+            "fresh-hash-2",
+            "fresh-hash-3",
+        ]
+    else:
+        assert hashed_passwords == []
+        assert [user.password_hash for user in users] == [
+            "old-admin-hash",
+            "old-auditor-hash",
+            "old-user-hash",
+        ]
+
+
+def test_reset_passwords_requires_configured_password() -> None:
+    with pytest.raises(
+        ValueError,
+        match="SEED_PASSWORD is required to reset seeded passwords",
+    ):
+        seed_script.seed(FakeSession(), reset_passwords=True)  # type: ignore[arg-type]

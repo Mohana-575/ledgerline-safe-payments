@@ -41,6 +41,9 @@ the holder's Personal and Savings accounts, and funds them through the ledger.
 Set `SEED_PASSWORD` before running it to use one password for newly created
 users. If it is unset, unique passwords are generated and printed once; save
 them securely. The command can be rerun safely.
+To reset the passwords of existing seeded users, set `SEED_PASSWORD` and rerun
+the command with `--reset-passwords`; without that flag, existing passwords are
+left unchanged.
 
 The API health check is available at `GET /health`.
 

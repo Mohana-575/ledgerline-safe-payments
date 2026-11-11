@@ -172,9 +172,15 @@ def _request_hash(
     from_account_id: int | None,
     to_account_id: int | None,
     amount_paise: int,
+    to_account_number: str | None = None,
 ) -> str:
+    request_data = (
+        (kind, from_account_id, "account_number", to_account_number, amount_paise)
+        if to_account_number is not None
+        else (kind, from_account_id, to_account_id, amount_paise)
+    )
     canonical_request = json.dumps(
-        (kind, from_account_id, to_account_id, amount_paise),
+        request_data,
         separators=(",", ":"),
         ensure_ascii=False,
     )
@@ -320,8 +326,15 @@ def _perform_movement(
     from_account_id: int | None,
     to_account_id: int | None,
     amount_paise: int,
+    to_account_number: str | None = None,
 ) -> Transaction:
     _validate_amount(amount_paise)
+    if kind == "TRANSFER" and to_account_number is not None:
+        to_account_id = db_session.scalar(
+            select(Account.id).where(Account.account_number == to_account_number)
+        )
+        if to_account_id is None:
+            raise AccountNotFoundError("Transfer destination account not found")
     if kind == "TRANSFER" and from_account_id == to_account_id:
         raise ForbiddenMovementError("Transfer source and destination must differ")
     if kind == "DEPOSIT" and to_account_id is None:
@@ -551,6 +564,7 @@ def post_movement(
     to_account_id: int | None,
     amount_paise: int,
     idempotency_key: str,
+    to_account_number: str | None = None,
 ) -> MovementResult:
     if not db_session.in_transaction():
         db_session.begin()
@@ -561,6 +575,7 @@ def post_movement(
             from_account_id,
             to_account_id,
             amount_paise,
+            to_account_number,
         )
         is_first_request = _idempotency_inserted(
             db_session,
@@ -651,6 +666,7 @@ def post_movement(
                 from_account_id,
                 to_account_id,
                 amount_paise,
+                to_account_number,
             )
         except LedgerError as error:
             result = _error_response(error)

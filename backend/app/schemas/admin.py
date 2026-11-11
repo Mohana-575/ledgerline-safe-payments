@@ -5,6 +5,19 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 
+class AdminUserResponse(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        from_attributes=True,
+        strict=True,
+    )
+
+    id: uuid.UUID
+    full_name: str
+    email: str
+    role: Literal["ADMIN", "ACCOUNT_HOLDER", "AUDITOR"]
+
+
 class AccountBalanceMismatchResponse(BaseModel):
     account_id: int
     account_number: str
@@ -60,6 +73,17 @@ class DashboardTransaction(BaseModel):
     balance_after_paise: int
 
 
+class DashboardAccount(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    id: int
+    account_number: str
+    name: str
+    type: str
+    balance_paise: int
+    status: str
+
+
 class DashboardResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -67,4 +91,5 @@ class DashboardResponse(BaseModel):
     account_count: int
     transactions_last_30_days: int
     role: Literal["ADMIN", "ACCOUNT_HOLDER", "AUDITOR"]
+    accounts: list[DashboardAccount]
     recent_transactions: list[DashboardTransaction]

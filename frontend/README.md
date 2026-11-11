@@ -1,32 +1,22 @@
-# React + TypeScript + Vite
+# LedgerLine frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The React app uses Tailwind CSS v4 theme tokens, React Router, TanStack Query,
+and cookie-based authentication. The API client includes credentials on requests
+and only adds an `Idempotency-Key` header when a request explicitly provides one.
 
-Currently, two official plugins are available:
+Set `VITE_API_BASE_URL` when the API is served from a different origin. By
+default, requests use the `/api` prefix and the Vite development proxy forwards
+them to the backend. The authentication provider loads the current session from
+`GET /auth/me`.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+The Statements page loads the visible accounts from `GET /accounts` and fetches
+filtered, cursor-paginated activity from `GET /accounts/{id}/statement`.
+Account visibility is enforced by the API for each signed-in role.
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
-```
-
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Audit Logs uses the cursor-paginated `GET /audit-logs` endpoint with action and
+date filters; account holders only receive their own events. Profile displays
+the signed-in user's name, email, and role without edit controls. The Admin page
+allows admins to create accounts, assign users, and list users and accounts.
+Admins and auditors can run reconciliation and ledger verification checks;
+auditors only see the read-only check view. `GET /admin/users` returns safe user
+summaries to administrators only.

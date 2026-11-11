@@ -3,16 +3,16 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from httpx import AsyncClient, Response
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
-
 from app.core.security import ACCESS_TOKEN_COOKIE, create_access_token
 from app.models.account import Account
 from app.models.audit_log import AuditLog
 from app.models.ledger_entry import LedgerEntry
 from app.models.refused_attempt import RefusedAttempt
 from app.models.user import User
+from httpx import AsyncClient, Response
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
 from tests.factories import fund_account, make_account, make_user
 
 
@@ -246,6 +246,39 @@ async def test_holder_cannot_transfer_to_external_system_account(
         )
         == refusals_before + 1
     )
+
+
+@pytest.mark.asyncio
+async def test_holder_can_transfer_to_account_number(
+    db_session: Session,
+    uvicorn_server: str,
+) -> None:
+    admin = make_user(db_session, role="ADMIN")
+    holder = make_user(db_session)
+    destination_owner = make_user(db_session)
+    source = make_account(db_session, holder)
+    destination = make_account(db_session, destination_owner)
+    db_session.commit()
+    fund_account(db_session, admin, source, 10_000)
+
+    client = _client(uvicorn_server, holder)
+    try:
+        response = await client.post(
+            "/transfers",
+            json={
+                "from_account_id": source.id,
+                "to_account_number": destination.account_number,
+                "amount_paise": 1_000,
+            },
+            headers={"Idempotency-Key": f"account-number-{uuid.uuid4().hex}"},
+        )
+    finally:
+        await _close(client)
+
+    assert response.status_code == 201, response.text
+    assert response.json()["kind"] == "TRANSFER"
+    assert _balance(db_session, source.id) == 9_000
+    assert _balance(db_session, destination.id) == 1_000
 
 
 @pytest.mark.asyncio

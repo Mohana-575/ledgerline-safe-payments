@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import uuid
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://localhost/ledgerline")
 os.environ.setdefault(
@@ -11,14 +12,13 @@ os.environ.setdefault(
 )
 os.environ.setdefault("JWT_SECRET", "test-secret-for-ledgerline-32-bytes")
 
-from fastapi.testclient import TestClient
-
 from app.api.dependencies import current_user
 from app.api.routes import admin as admin_routes
 from app.db.session import get_db
 from app.main import app
 from app.models.audit_log import AuditLog
 from app.models.user import User
+from fastapi.testclient import TestClient
 
 
 class FakeResult:
@@ -58,6 +58,8 @@ class FakeSession:
         self.recent_rows: list[dict[str, object]] = []
         self.account_ids: list[int] = [1, 2]
         self.member_account_ids: list[int] = [1, 2]
+        self.dashboard_accounts: list[object] = []
+        self.user_rows: list[User] = []
         self.audit_logs: list[AuditLog] = []
         self.commits = 0
         self.statements: list[str] = []
@@ -67,8 +69,12 @@ class FakeSession:
 
     def scalars(self, statement: object) -> FakeScalarRows:
         query = str(statement)
+        if "FROM users" in query:
+            return FakeScalarRows(self.user_rows)
         if "account_members.account_id" in query:
             return FakeScalarRows(self.member_account_ids)
+        if "accounts.account_number" in query:
+            return FakeScalarRows(self.dashboard_accounts)
         if "accounts.id" in query:
             return FakeScalarRows(self.account_ids)
         return FakeScalarRows([])
@@ -168,6 +174,66 @@ def test_admin_routes_reject_account_holder() -> None:
     assert verify.status_code == 403
 
 
+def test_admin_user_listing_is_admin_only_and_exposes_safe_fields() -> None:
+    admin = _user("ADMIN")
+    auditor = _user("AUDITOR")
+    listed_user = _user("ACCOUNT_HOLDER")
+    db = FakeSession()
+    db.user_rows = [listed_user]
+    app.dependency_overrides[current_user] = lambda: admin
+    app.dependency_overrides[get_db] = lambda: db
+    try:
+        admin_response = TestClient(app).get("/admin/users")
+        app.dependency_overrides[current_user] = lambda: auditor
+        auditor_response = TestClient(app).get("/admin/users")
+    finally:
+        app.dependency_overrides.pop(current_user)
+        app.dependency_overrides.pop(get_db)
+
+    assert admin_response.status_code == 200
+    assert admin_response.json() == [
+        {
+            "id": str(listed_user.id),
+            "full_name": listed_user.full_name,
+            "email": listed_user.email,
+            "role": listed_user.role,
+        }
+    ]
+    assert auditor_response.status_code == 403
+
+
+def test_users_listing_allows_admin_and_auditor_but_rejects_holder() -> None:
+    admin = _user("ADMIN")
+    auditor = _user("AUDITOR")
+    holder = _user("ACCOUNT_HOLDER")
+    listed_user = _user("ACCOUNT_HOLDER")
+    db = FakeSession()
+    db.user_rows = [listed_user]
+    app.dependency_overrides[current_user] = lambda: admin
+    app.dependency_overrides[get_db] = lambda: db
+    try:
+        admin_response = TestClient(app).get("/users")
+        app.dependency_overrides[current_user] = lambda: auditor
+        auditor_response = TestClient(app).get("/users")
+        app.dependency_overrides[current_user] = lambda: holder
+        holder_response = TestClient(app).get("/users")
+    finally:
+        app.dependency_overrides.pop(current_user)
+        app.dependency_overrides.pop(get_db)
+
+    expected_user = {
+        "id": str(listed_user.id),
+        "full_name": listed_user.full_name,
+        "email": listed_user.email,
+        "role": listed_user.role,
+    }
+    assert admin_response.status_code == 200
+    assert admin_response.json() == [expected_user]
+    assert auditor_response.status_code == 200
+    assert auditor_response.json() == [expected_user]
+    assert holder_response.status_code == 403
+
+
 def test_verify_ledger_returns_broken_entry_and_audits_run(monkeypatch) -> None:
     actor = _user("ADMIN")
     db = FakeSession()
@@ -203,6 +269,16 @@ def test_dashboard_uses_only_member_accounts_and_returns_real_activity() -> None
     transaction_id = uuid.uuid4()
     db = FakeSession()
     db.member_account_ids = [12]
+    db.dashboard_accounts = [
+        SimpleNamespace(
+            id=12,
+            account_number="ACC0012",
+            name="Everyday savings",
+            type="SAVINGS",
+            balance_paise=4250,
+            status="ACTIVE",
+        )
+    ]
     db.scalar_values = [3, 4250]
     db.recent_rows = [
         {
@@ -230,6 +306,16 @@ def test_dashboard_uses_only_member_accounts_and_returns_real_activity() -> None
         "account_count": 1,
         "transactions_last_30_days": 3,
         "role": "ACCOUNT_HOLDER",
+        "accounts": [
+            {
+                "id": 12,
+                "account_number": "ACC0012",
+                "name": "Everyday savings",
+                "type": "SAVINGS",
+                "balance_paise": 4250,
+                "status": "ACTIVE",
+            }
+        ],
         "recent_transactions": [
             {
                 "transaction_id": str(transaction_id),
