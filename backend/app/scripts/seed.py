@@ -30,7 +30,7 @@ class SeedUser:
 _USERS = (
     SeedUser("admin@example.com", "Administrator", "ADMIN"),
     SeedUser("auditor@example.com", "Auditor", "AUDITOR"),
-    SeedUser("user1@example.com", "User One", "ACCOUNT_HOLDER"),
+    SeedUser("user1@example.com", "Hide", "ACCOUNT_HOLDER"),
 )
 _USER_ACCOUNTS = (
     ("ACC1001", "Personal", "PERSONAL", 7_500_000),
